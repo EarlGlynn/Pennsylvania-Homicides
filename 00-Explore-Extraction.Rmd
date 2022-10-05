@@ -1,0 +1,426 @@
+---
+title: "Explore Extracting PA Supplemental Homicde Data from Excel Files"
+author: "Earl F Glynn<br>"
+date: "<small>`r Sys.Date()`</small>"
+output:
+  html_document:
+    code_download: true
+    theme: cerulean
+    toc: yes
+    toc_depth:  3
+    toc_float:
+      collapsed:  yes
+      smooth_scroll: yes
+    number_sections: yes
+    code_folding:  show
+---
+
+```{r setup, echo = FALSE}
+# http://biostat.mc.vanderbilt.edu/wiki/Main/KnitrHtmlTemplate
+require(Hmisc)    # provides knitrSet and other functions
+knitrSet(lang = 'markdown',   # If using blogdown: knitrSet(lang='blogdown')
+         fig.align = 'left',
+         w = 6.5,
+         h = 4.5,
+         cache = FALSE)
+```
+
+`r hidingTOC(buttonLabel = "Outline")`
+
+```{r startYourEngines, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  comment = NA)
+
+time.1 <- Sys.time()
+```
+
+# Setup {.tabset .tabset-fade .tabset-pills}
+
+## {.active}
+
+## Constants
+
+```{r Constants}
+FILE_PREFIX   <- "x"    # no spaces
+```
+
+```{r}
+EXCEL_LIMIT <- 2^20
+```
+
+## Packages
+
+```{r Packages}
+library(tidyverse)
+library(lubridate)   # mdy
+```
+
+Display formatting
+
+```{r Display}
+library(kableExtra)  # kable_styling
+#library(IRdisplay)   # display_html (needed in Jupyter notebooks)
+```
+
+I/O
+
+```{r IO}
+library(readxl)      # read_xlsx
+library(readr)       # write_csv
+library(writexl)     # write_xlsx
+```
+
+ Graphics
+
+```{r Graphics}
+library(scales)      # comma, comma_format
+```
+
+## ggplot theme
+
+[ggplot Themes Gallery](https://www.datanovia.com/en/blog/ggplot-themes-gallery/)
+
+```{r ggplotTheme}
+theme_set(theme_minimal() +
+
+          theme(axis.text             = element_text(size = 10),
+                axis.title            = element_text(size = 14),
+
+                plot.caption          = element_text(hjust = c(0.0,1.0)),
+                plot.caption.position = "plot",   # R 4.0.0
+
+                plot.title.position   = "plot",
+                title                 = element_text(size = 14))
+           )
+
+COLOR_BAR     <- "skyblue"
+COLOR_OUTLINE <- "grey80"
+```
+
+## Helper functions
+
+```{r Helpers}
+Show <- function(data, caption="", bigMark="",
+                 height = NULL, width = NULL, ...)
+{
+  data                                       %>%
+  kable("html", caption=caption,
+        format.args=list(big.mark=bigMark))  %>%
+  kable_styling(bootstrap_options=c("striped", "bordered", "condensed"),
+                position="left",
+                full_width=FALSE, ...)       %>%
+  scroll_box(height = height, width = width) #  %>%
+# as.character()                             %>%      # Jupyter Only
+# display_html()                                      # Jupyter Only
+}
+```
+
+# Data Source 
+
+`download` directory
+
+1. Start on this page:  [Crime in Pennsylvania Online](https://www.ucr.pa.gov/PAUCRSPUBLIC/ReportsIndex/List)
+
+2. Select [Annual SRS Summary Report](https://www.ucr.pa.gov/PAUCRSPUBLIC/SRSReport/AnnualSRSSummary)
+
+3. Select Report Type:  Supplemental Homicide
+
+4. Step single month by specifying `Start` and `End` the same month, e.g., Sep - 2022
+
+5. Select:  Generate Report
+
+6. Select floppy icon dropdown:  Excel
+
+7. Save to file:  SRS_AnnualSummarySupplementalHomicide-YYYY-MM.xlsx
+
+8. Repeat for 92 months:  2015-01 through 2022-09.
+
+
+# Setup table column names
+
+```{r}
+race     <- c("RW", "RB", "RN", "RA", "RH", "RU")
+sex      <- c("SM", "SF", "SU")
+ethnic   <- c("EH", "EN", "EU")
+```
+
+
+```{r}
+raceCodes <- t( outer(race, sex, FUN = paste0) ) %>% as.vector() 
+raceCodes
+```
+
+```{r}
+ethnicCodes <- t( outer(ethnic, sex, FUN = paste0) ) %>% as.vector() 
+ethnicCodes
+```
+
+```{r}
+columnCodes <- c("Age", raceCodes, ethnicCodes)
+columnCodes
+```
+
+# Read File
+
+```{r}
+yyyymm <- "2022-08"
+yyyymm
+```
+
+```{r}
+filename <- paste0("download/SRS_AnnualSummarySupplementalHomicide-", yyyymm, ".xlsx")
+d <- read_xlsx(filename)
+
+dim(d)
+```
+
+```{r}
+write_xlsx(d, paste0("rawdata/", yyyymm, "-Reformat.xlsx"))
+```
+
+# Extract data
+
+```{r}
+beginDate <- str_sub(d[6, 12], -10) %>% mdy()  # last 10 characters
+beginDate
+```
+
+```{r}
+endDate <- str_sub(d[7, 35], -10) %>% mdy()
+endDate
+```
+
+```{r}
+agency <- str_sub(d[13, 1], -3)
+agency
+```
+
+# Victim
+
+```{r}
+section1 <- d[15, 1]
+section1
+```
+
+### Properties
+
+```{r}
+columns <- which(!is.na(d[16, 1 : ncol(d)]))
+columns
+```
+
+```{r}
+t( d[16, columns] )
+```
+
+Verify property values as expected
+
+```{r}
+stopifnot( all(d[16, columns] == c("Race", "Ethnic Origin")) )
+```
+
+### Race / Ethnicity
+
+```{r}
+columns <- which(!is.na(d[17, 1 : ncol(d)]))
+columns
+```
+
+```{r}
+t(d[17, columns])
+```
+
+Verify race values as expected
+
+```{r}
+stopifnot( all(d[17, columns] == c("White", "Black /African American", "Native American / Alaskan Native",
+                                   "Asian", "Native Hawaiian / Other Pacific Islander", "Unknown",
+                                   "Hispanic", "Not Hispanic", "Unknown")) )
+```
+
+### Sex
+
+```{r}
+columns <- which(!is.na(d[18, 1 : ncol(d)]))
+columns
+```
+
+```{r}
+t( d[18, columns] )
+```
+
+Verify sex values as expected
+
+```{r}
+stopifnot( all( d[18, columns]  == rep(c("M", "F", "U"), length(columns) %/% 3)) )
+```
+
+### Victim table
+
+```{r}
+columns <- c(1, which(!is.na(d[18, 1 : ncol(d)])))
+columns
+```
+
+```{r}
+victim <- d[19:38, columns]
+dim(victim)
+```
+
+```{r}
+colnames(victim) <- columnCodes
+```
+
+```{r}
+victim <- 
+  victim  %>%
+  mutate(across(starts_with(c("R", "E")), as.numeric) )
+```
+
+
+```{r}
+victim <- 
+  victim                                                 %>%
+  mutate(across(starts_with(c("R", "E")), as.numeric) )  %>%
+  mutate(Agency = agency,
+         Table  = "Victim", 
+         Begin  = beginDate, 
+         End    = endDate)                               %>%
+  relocate(Agency, Table, Begin, End)
+```
+
+
+```{r}
+victim %>% Show()
+```
+
+# Offender
+
+```{r}
+section2 <- d[41, 1]
+section2
+```
+
+### Properties
+
+```{r}
+columns <- which(!is.na(d[42, 1 : ncol(d)]))
+columns
+```
+
+```{r}
+d[42, columns]
+```
+
+verify property values as expected
+
+
+```{r}
+stopifnot( all(d[42, columns] == c("Race", "Ethnic Origin")) )
+```
+
+### Race / Ethnicity
+
+
+```{r}
+columns <- which(!is.na(d[43, 1 : ncol(d)]))
+columns
+```
+```{r}
+t(d[43, columns])
+```
+
+Verify race values as expected
+
+```{r}
+stopifnot( all(d[43, columns] == c("White", "Black /African American", "Native American / Alaskan Native",
+                                   "Asian", "Native Hawaiian / Other Pacific Islander", "Unknown",
+                                   "Hispanic", "Not Hispanic", "Unknown")) )
+```
+
+### Sex
+
+```{r}
+columns <- which(!is.na(d[44, 1 : ncol(d)]))
+columns
+```
+
+```{r}
+t( d[44, columns] )
+```
+
+Verify sex values as expected
+
+```{r}
+stopifnot( all( d[44, columns]  == rep(c("M", "F", "U"), length(columns) %/% 3)) )
+```
+
+### Offender table
+
+```{r}
+columns <- c(1, which(!is.na(d[44, 1 : ncol(d)])))
+columns
+```
+
+```{r}
+offender <- d[45:64, columns]
+dim(offender)
+```
+
+```{r}
+colnames(offender) <- columnCodes
+```
+
+```{r}
+offender <- 
+  offender                                               %>%
+  mutate(across(starts_with(c("R", "E")), as.numeric) )  %>%
+  mutate(Agency = agency,
+         Table  = "Offender", 
+         Begin  = beginDate, 
+         End    = endDate)                               %>%
+  relocate(Agency, Table, Begin, End)
+```
+
+```{r}
+offender %>% Show()
+```
+
+# Final Extracted Table
+
+```{r}
+final <- bind_rows(victim, offender)
+dim(final)
+```
+
+```{r}
+write_xlsx(final, paste0("tables/", yyyymm, "-Victim-Offender-Data.xlsx"))
+```
+
+```{r}
+final %>% Show()
+```
+
+# Epilog {.tabset .tabset-fade .tabset-pills}
+
+## {.active}
+
+## Session Info
+
+```{r devtoolsSessionInfo}
+devtools::session_info()
+```
+
+</div>
+
+```{r epilogDeltaTime, echo=FALSE}
+time.2 <- Sys.time()
+processingTime <- paste("Processing time:", sprintf("%.1f",
+                        as.numeric(difftime(time.2,
+                                            time.1, units="secs"))), "secs\n")
+```
+
+`r processingTime`
+`r format(time.2, "%Y-%m-%d %H%M")`
+

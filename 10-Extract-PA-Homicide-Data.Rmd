@@ -1,0 +1,451 @@
+---
+title: "Extracting PA Supplemental Homicde Data from Excel Files"
+author: "Earl F Glynn<br>"
+date: "<small>`r Sys.Date()`</small>"
+output:
+  html_document:
+    code_download: true
+    theme: cerulean
+    toc: yes
+    toc_depth:  3
+    toc_float:
+      collapsed:  yes
+      smooth_scroll: yes
+    number_sections: yes
+    code_folding:  show
+---
+
+```{r setup, echo = FALSE}
+# http://biostat.mc.vanderbilt.edu/wiki/Main/KnitrHtmlTemplate
+require(Hmisc)    # provides knitrSet and other functions
+knitrSet(lang = 'markdown',   # If using blogdown: knitrSet(lang='blogdown')
+         fig.align = 'left',
+         w = 6.5,
+         h = 4.5,
+         cache = FALSE)
+```
+
+`r hidingTOC(buttonLabel = "Outline")`
+
+```{r startYourEngines, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  comment = NA)
+
+time.1 <- Sys.time()
+```
+
+# Setup {.tabset .tabset-fade .tabset-pills}
+
+## {.active}
+
+## Constants
+
+```{r Constants}
+FILE_PREFIX   <- "x"    # no spaces
+```
+
+```{r}
+EXCEL_LIMIT <- 2^20
+```
+
+## Packages
+
+```{r Packages}
+library(tidyverse)
+library(lubridate)   # mdy
+```
+
+Display formatting
+
+```{r Display}
+library(kableExtra)  # kable_styling
+#library(IRdisplay)   # display_html (needed in Jupyter notebooks)
+```
+
+I/O
+
+```{r IO}
+library(readxl)      # read_xlsx
+library(readr)       # write_csv
+library(writexl)     # write_xlsx
+```
+
+ Graphics
+
+```{r Graphics}
+library(scales)      # comma, comma_format
+```
+
+## ggplot theme
+
+[ggplot Themes Gallery](https://www.datanovia.com/en/blog/ggplot-themes-gallery/)
+
+```{r ggplotTheme}
+theme_set(theme_minimal() +
+
+          theme(axis.text             = element_text(size = 10),
+                axis.title            = element_text(size = 14),
+
+                plot.caption          = element_text(hjust = c(0.0,1.0)),
+                plot.caption.position = "plot",   # R 4.0.0
+
+                plot.title.position   = "plot",
+                title                 = element_text(size = 14))
+           )
+
+COLOR_BAR     <- "skyblue"
+COLOR_OUTLINE <- "grey80"
+```
+
+## Helper functions
+
+```{r Helpers}
+Show <- function(data, caption="", bigMark="",
+                 height = NULL, width = NULL, ...)
+{
+  data                                       %>%
+  kable("html", caption=caption,
+        format.args=list(big.mark=bigMark))  %>%
+  kable_styling(bootstrap_options=c("striped", "bordered", "condensed"),
+                position="left",
+                full_width=FALSE, ...)       %>%
+  scroll_box(height = height, width = width) #  %>%
+# as.character()                             %>%      # Jupyter Only
+# display_html()                                      # Jupyter Only
+}
+```
+
+# Data Source 
+
+`download` directory
+
+1. Start on this page:  [Crime in Pennsylvania Online](https://www.ucr.pa.gov/PAUCRSPUBLIC/ReportsIndex/List)
+
+2. Select [Annual SRS Summary Report](https://www.ucr.pa.gov/PAUCRSPUBLIC/SRSReport/AnnualSRSSummary)
+
+3. Select Report Type:  Supplemental Homicide
+
+4. Step single month by specifying `Start` and `End` the same month, e.g., Sep - 2022
+
+5. Select:  Generate Report
+
+6. Select floppy icon dropdown:  Excel
+
+7. Save to file:  SRS_AnnualSummarySupplementalHomicide-YYYY-MM.xlsx
+
+8. Repeat for 92 months:  2015-01 through 2022-09.
+
+See `00-Explore-Extraction.html` for detailed look at extracting the data.
+
+A function will read and process each each Excel file.
+
+# Processing function
+
+Many redundant checks to verify the format is the same across all reports.
+
+```{r}
+processHomicideData <- function(yyyymm)
+{
+
+  # Setup table column names
+  
+  race     <- c("RW", "RB", "RN", "RA", "RH", "RU")
+  sex      <- c("SM", "SF", "SU")
+  ethnic   <- c("EH", "EN", "EU")
+  
+  raceCodes <- t( outer(race, sex, FUN = paste0) ) %>% as.vector() 
+  
+  ethnicCodes <- t( outer(ethnic, sex, FUN = paste0) ) %>% as.vector() 
+  
+  columnCodes <- c("Age", raceCodes, ethnicCodes)
+  
+  
+  filename <- paste0("download/SRS_AnnualSummarySupplementalHomicide-", yyyymm, ".xlsx")
+  d <- read_xlsx(filename)
+
+
+  # save `rawdata` version
+  write_xlsx(d, paste0("rawdata/", yyyymm, "-Reformat.xlsx"))
+
+
+  # Extract data
+
+  beginDate <- str_sub(d[6, 12], -10) %>% mdy()  # last 10 characters
+  endDate   <- str_sub(d[7, 35], -10) %>% mdy()
+  
+  agency <- str_sub(d[13, 1], -3)
+
+  # Victim data with verification checks
+  vOK1 <- d[15, 1] == "Victim Age"
+  
+  columns <- which(!is.na(d[16, 1 : ncol(d)]))
+  vOK2 <- all(d[16, columns] == c("Race", "Ethnic Origin")) 
+  
+  columns <- which(!is.na(d[17, 1 : ncol(d)]))
+  vOK3 <- all(d[17, columns] == c("White", "Black /African American", "Native American / Alaskan Native",
+                                     "Asian", "Native Hawaiian / Other Pacific Islander", "Unknown",
+                                     "Hispanic", "Not Hispanic", "Unknown")) 
+  
+  columns <- which(!is.na(d[18, 1 : ncol(d)]))
+  vOK4 <-  all( d[18, columns]  == rep(c("M", "F", "U"), length(columns) %/% 3)) 
+  
+  columns <- c(1, which(!is.na(d[18, 1 : ncol(d)])))
+  victim <- d[19:38, columns]
+  colnames(victim) <- columnCodes
+  
+  victim <- 
+    victim                                                 %>%
+    mutate(across(starts_with(c("R", "E")), as.numeric) )  %>%
+    mutate(Agency = agency,
+           Table  = "Victim", 
+           Begin  = beginDate, 
+           End    = endDate)                               %>%
+    relocate(Agency, Table, Begin, End)
+
+  # Offender data with verification checks
+  oOK1 <- d[41, 1] == "Offender Age"
+  
+  columns <- which(!is.na(d[42, 1 : ncol(d)]))
+  oOK2 <- all(d[42, columns] == c("Race", "Ethnic Origin")) 
+  
+  columns <- which(!is.na(d[43, 1 : ncol(d)]))
+  oOK3 <- all(d[43, columns] == c("White", "Black /African American", "Native American / Alaskan Native",
+                                     "Asian", "Native Hawaiian / Other Pacific Islander", "Unknown",
+                                     "Hispanic", "Not Hispanic", "Unknown")) 
+  
+  columns <- which(!is.na(d[44, 1 : ncol(d)]))
+  oOK4 <-  all( d[44, columns]  == rep(c("M", "F", "U"), length(columns) %/% 3)) 
+
+  columns <- c(1, which(!is.na(d[44, 1 : ncol(d)])))
+  offender <- d[45:64, columns]
+
+  colnames(offender) <- columnCodes
+
+  offender <- 
+    offender                                               %>%
+    mutate(across(starts_with(c("R", "E")), as.numeric) )  %>%
+    mutate(Agency = agency,
+           Table  = "Offender", 
+           Begin  = beginDate, 
+           End    = endDate)                               %>%
+    relocate(Agency, Table, Begin, End)
+
+  # Final Extracted Table
+  final <- bind_rows(victim, offender)
+
+  write_xlsx(final, paste0("tables/", yyyymm, "-Victim-Offender-Data.xlsx"))
+  
+  list(
+        table      = final, 
+        victimOK   = vOK1 && vOK2 && vOK3 && vOK4,
+        offenderOK = oOK1 && oOK2 && oOK3 && oOK4
+      )
+}
+```
+
+# Test Function
+
+```{r}
+yyyymm <- "2022-08"
+d <- processHomicideData(yyyymm)
+
+str(d)
+```
+
+# Process all downloaded files
+
+```{r}
+yearMonthList <- 
+  list.files(path = "download", glob2rx("*.xlsx")) %>% 
+  str_sub(-12)  %>%
+  str_sub(1, 7)
+
+length(yearMonthList)
+```
+
+```{r}
+yearMonthList
+```
+
+```{r}
+finalTable <- NULL
+
+for (i in 1:length(yearMonthList))
+{
+  cat(yearMonthList[i], "\n")
+  result <- processHomicideData(yearMonthList[i])
+  if (result$victimOK && result$offenderOK)
+  {
+    finalTable <- bind_rows(finalTable, result$table)
+  } else
+  {
+    cat("   victim", result$victimOK, "offender", result$offenderOK, "\n")
+  }
+    
+}
+
+dim(finalTable)
+```
+
+## Explore and Verify
+
+### `Offender` and `Victim table counts match
+
+```{r}
+finalTable     %>%
+  count(Table) %>%
+  Show()
+```
+
+## Same `Age` intervals alwaysw present
+
+```{r}
+finalTable    %>%
+  count(Age)  %>%
+  Show(height = "200px")
+```
+
+## Introduce `AgeIntervals`
+
+Recode `Age` into fewer and more consistent intervals
+
+```{r}
+AgeIntervals <-
+  tibble(
+         Age = c( 
+                 "UNDER 1", "01-04", "05-09",
+                 "10-14", "15-16", "17-19",
+                 "20-24", "25-29",
+                 "30-34", "35-39",
+                 "40-44", "45-49",
+                 "50-54", "55-59",
+                 "60-64", "65-69",
+                 "70-74", "75 and UP",
+                 "Unknown",
+                 "Total"
+                ),
+         AgeInterval = c(
+                          "00s",  "00s",  "00s",
+                          "10s",  "10s",  "10s",
+                          "20s",  "20s",
+                          "30s",  "30s",
+                          "40s",  "40s",
+                          "50s",  "50s",
+                          "60s",  "60s",
+                          "70s+", "70s+",
+                          "Unknown",
+                          "Total"
+                        )
+        )
+
+AgeIntervals %>% Show()
+```
+
+Add `AgeIntervals` to tibble
+
+`group_by` by `AgeIntervals` for aggregationws instead of `Age` (but ignore `Total`)
+
+```{r}
+finalTable <- 
+  finalTable %>%
+  inner_join(AgeIntervals, by = "Age")  %>%
+  relocate(AgeInterval, .after = Age)
+```
+
+# Aggregate all sexes by race and ethnic origin
+
+```{r}
+finalTable <-
+  finalTable %>%
+  mutate(
+          RWhite    = RWSM +	RWSF + RWSU,
+          RBlack    = RBSM	+ RBSF + RBSU,
+          RNative   = RNSM	+ RNSF + RNSU,
+          RAsian    = RASM	+ RASF + RASU,
+          RHawaiian = RHSM	+ RHSF + RHSU,
+          RUnknown  = RUSM	+ RUSF + RUSU,
+          RTotal    = RWhite + RBlack + RNative + RAsian + RHawaiian + RUnknown,
+        
+          EHispanic    = EHSM	+ EHSF + EHSU,
+          ENonHispanic = ENSM +	ENSF + ENSU,
+          EUnknown     = EUSM	+ EUSF + EUSU,
+          ETotal       = EHispanic + ENonHispanic + EUnknown
+        )
+```
+
+```{r}
+glimpse(finalTable)
+```
+
+
+```{r}
+write_xlsx(finalTable, "Pennsylvania-Homicide-Data-Monthly-By-Age-Group.xlsx")
+```
+
+```{r}
+mismatches <- (finalTable$RTotal == finalTable$ETotal) %>% as.integer()
+table(mismatches, useNA = "ifany")
+```
+
+```{r}
+write_xlsx(finalTable[mismatches == 0, ], "Pennsylvania-Homicide-Data-Monthly-By-Age-Group-Mismatches.xlsx")
+```
+
+```{r}
+counts <- 
+  finalTable            %>%
+  group_by(Begin, End)  %>%
+  count()               %>%
+  ungroup()             %>%
+  arrange(Begin)
+
+counts %>%
+  Show(height = "200px")
+```
+
+# Extract  Monthly `Total` lines
+
+```{r}
+monthlyTotals <-
+  finalTable   %>%
+  filter(Age == "Total")
+
+nrow(monthlyTotals)
+```
+
+```{r}
+write_xlsx(monthlyTotals, "Pennsylvania-Homicide-Data-Monthly-Totals.xlsx")
+```
+
+```{r}
+mismatches <- (monthlyTotals$RTotal == monthlyTotals$ETotal) %>% as.integer()
+table(mismatches, useNA = "ifany")
+```
+
+```{r}
+write_xlsx(monthlyTotals[mismatches == 0, ], "Pennsylvania-Homicide-Data-Monthly-Totals-Mismatches.xlsx")
+```
+
+# Epilog {.tabset .tabset-fade .tabset-pills}
+
+## {.active}
+
+## Session Info
+
+```{r devtoolsSessionInfo}
+devtools::session_info()
+```
+
+</div>
+
+```{r epilogDeltaTime, echo=FALSE}
+time.2 <- Sys.time()
+processingTime <- paste("Processing time:", sprintf("%.1f",
+                        as.numeric(difftime(time.2,
+                                            time.1, units="secs"))), "secs\n")
+```
+
+`r processingTime`
+`r format(time.2, "%Y-%m-%d %H%M")`
+
